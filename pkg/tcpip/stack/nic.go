@@ -174,45 +174,62 @@ func (n *NIC) enable() *tcpip.Error {
 		return err
 	}
 
-	if !n.stack.autoGenIPv6LinkLocal {
-		return nil
-	}
-
-	l2addr := n.linkEP.LinkAddress()
-
-	// Only attempt to generate the link-local address if we have a
-	// valid MAC address.
+	// Only attempt to generate the link-local address if the stack is
+	// configured to auto-generate an IPv6 link-local address, and we have
+	// a valid MAC address to generate it from.
 	//
 	// TODO(b/141011931): Validate a LinkEndpoint's link address
 	// (provided by LinkEndpoint.LinkAddress) before reaching this
 	// point.
-	if !header.IsValidUnicastEthernetAddress(l2addr) {
-		return nil
+	l2addr := n.linkEP.LinkAddress()
+	if n.stack.autoGenIPv6LinkLocal && header.IsValidUnicastEthernetAddress(l2addr) {
+		if _, err := n.addPermanentAddressLocked(tcpip.ProtocolAddress{
+			Protocol: header.IPv6ProtocolNumber,
+			AddressWithPrefix: tcpip.AddressWithPrefix{
+				Address:   header.LinkLocalAddr(l2addr),
+				PrefixLen: header.IPv6LinkLocalPrefix.PrefixLen,
+			},
+		}, CanBePrimaryEndpoint); err != nil {
+			return err
+		}
 	}
 
-	addr := header.LinkLocalAddr(l2addr)
+	// If we are operating as a router, then do not solicit routers since we
+	// won't process the RAs anyways.
+	//
+	// Routers do not process Router Advertisements (RA) the same way a host
+	// does. That is, routers do not learn from RAs (e.g. on-link prefixes
+	// and default routers). Therefore, soliciting RAs from other routers on
+	// a link is unnecessary for routers.
+	if !n.stack.forwarding {
+		n.ndp.startSolicitingRouters()
+	}
 
-	_, err := n.addPermanentAddressLocked(tcpip.ProtocolAddress{
-		Protocol: header.IPv6ProtocolNumber,
-		AddressWithPrefix: tcpip.AddressWithPrefix{
-			Address:   addr,
-			PrefixLen: header.IPv6LinkLocalPrefix.PrefixLen,
-		},
-	}, CanBePrimaryEndpoint)
-
-	return err
+	return nil
 }
 
 // becomeIPv6Router transitions n into an IPv6 router.
 //
 // When transitioning into an IPv6 router, host-only state (NDP discovered
 // routers, discovered on-link prefixes, and auto-generated addresses) will
-// be cleaned up/invalidated.
+// be cleaned up/invalidated and NDP router solicitations will be stopped.
 func (n *NIC) becomeIPv6Router() {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
 	n.ndp.cleanupHostOnlyState()
+	n.ndp.stopSolicitingRouters()
+}
+
+// becomeIPv6Host transitions n into an IPv6 host.
+//
+// When transitioning into an IPv6 host, NDP router solicitations will be
+// started.
+func (n *NIC) becomeIPv6Host() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	n.ndp.startSolicitingRouters()
 }
 
 // attachLinkEndpoint attaches the NIC to the endpoint, which will enable it
