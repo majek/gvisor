@@ -977,13 +977,24 @@ func getSockOptSocket(t *kernel.Task, s socket.Socket, ep commonEndpoint, family
 		if err := ep.GetSockOpt(&v); err != nil {
 			return nil, syserr.TranslateNetstackError(err)
 		}
-		if len(v) == 0 {
+		if v == 0 {
 			return []byte{}, nil
 		}
 		if outLen < linux.IFNAMSIZ {
 			return nil, syserr.ErrInvalidArgument
 		}
-		return append([]byte(v), 0), nil
+		s := t.NetworkContext()
+		if s == nil {
+			return nil, syserr.ErrNoDevice
+		}
+		nic, ok := s.Interfaces()[int32(v)]
+		if !ok {
+			// TODO(eyalsoha): This line may only be reachable if we try to get the
+			// BindToDevice option from a socket on a device that is already
+			// removed. Can we test that?
+			return nil, syserr.ErrInvalidArgument
+		}
+		return append([]byte(nic.Name), 0), nil
 
 	case linux.SO_BROADCAST:
 		if outLen < sizeOfInt32 {
@@ -1427,7 +1438,20 @@ func setSockOptSocket(t *kernel.Task, s socket.Socket, ep commonEndpoint, name i
 		if n == -1 {
 			n = len(optVal)
 		}
-		return syserr.TranslateNetstackError(ep.SetSockOpt(tcpip.BindToDeviceOption(optVal[:n])))
+		name := string(optVal[:n])
+		if name == "" {
+			return syserr.TranslateNetstackError(ep.SetSockOpt(tcpip.BindToDeviceOption(0)))
+		}
+		s := t.NetworkContext()
+		if s == nil {
+			return syserr.ErrNoDevice
+		}
+		for nicID, nic := range s.Interfaces() {
+			if nic.Name == name {
+				return syserr.TranslateNetstackError(ep.SetSockOpt(tcpip.BindToDeviceOption(nicID)))
+			}
+		}
+		return syserr.ErrUnknownDevice
 
 	case linux.SO_BROADCAST:
 		if len(optVal) < sizeOfInt32 {

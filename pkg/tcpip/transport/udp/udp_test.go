@@ -517,22 +517,22 @@ func TestBindToDeviceOption(t *testing.T) {
 		t.Errorf("CreateNIC failed: %v", err)
 	}
 
-	// strPtr is used instead of taking the address of string literals, which is
+	// nicIDPtr is used instead of taking the address of NICID literals, which is
 	// a compiler error.
-	strPtr := func(s string) *string {
+	nicIDPtr := func(s tcpip.NICID) *tcpip.NICID {
 		return &s
 	}
 
 	testActions := []struct {
 		name                 string
-		setBindToDevice      *string
+		setBindToDevice      *tcpip.NICID
 		setBindToDeviceError *tcpip.Error
 		getBindToDevice      tcpip.BindToDeviceOption
 	}{
-		{"GetDefaultValue", nil, nil, ""},
-		{"BindToNonExistent", strPtr("non_existent_device"), tcpip.ErrUnknownDevice, ""},
-		{"BindToExistent", strPtr("my_device"), nil, "my_device"},
-		{"UnbindToDevice", strPtr(""), nil, ""},
+		{"GetDefaultValue", nil, nil, 0},
+		{"BindToNonExistent", nicIDPtr(999), tcpip.ErrUnknownDevice, 0},
+		{"BindToExistent", nicIDPtr(321), nil, 321},
+		{"UnbindToDevice", nicIDPtr(0), nil, 0},
 	}
 	for _, testAction := range testActions {
 		t.Run(testAction.name, func(t *testing.T) {
@@ -542,7 +542,7 @@ func TestBindToDeviceOption(t *testing.T) {
 					t.Errorf("SetSockOpt(%v) got %v, want %v", bindToDevice, got, want)
 				}
 			}
-			bindToDevice := tcpip.BindToDeviceOption("to be modified by GetSockOpt")
+			bindToDevice := tcpip.BindToDeviceOption(88888)
 			if ep.GetSockOpt(&bindToDevice) != nil {
 				t.Errorf("GetSockOpt got %v, want %v", ep.GetSockOpt(&bindToDevice), nil)
 			}
