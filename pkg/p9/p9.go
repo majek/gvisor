@@ -335,10 +335,10 @@ const (
 	MsgRgetattr             = 25
 	MsgTsetattr             = 26
 	MsgRsetattr             = 27
-	MsgTxattrwalk           = 30
-	MsgRxattrwalk           = 31
-	MsgTxattrcreate         = 32
-	MsgRxattrcreate         = 33
+	MsgTgetxattr            = 34
+	MsgRgetxattr            = 35
+	MsgTsetxattr            = 36
+	MsgRsetxattr            = 37
 	MsgTreaddir             = 40
 	MsgRreaddir             = 41
 	MsgTfsync               = 50

@@ -179,21 +179,20 @@ func TestEncodeDecode(t *testing.T) {
 			SetAttr: SetAttr{Permissions: Write},
 		},
 		&Rsetattr{},
-		&Txattrwalk{
-			FID:    1,
-			NewFID: 2,
-			Name:   "a",
+		&Tgetxattr{
+			FID:  1,
+			Name: "abc",
 		},
-		&Rxattrwalk{
-			Size: 1,
+		&Rgetxattr{
+			Value: "xyz",
 		},
-		&Txattrcreate{
-			FID:      1,
-			Name:     "a",
-			AttrSize: 2,
-			Flags:    3,
+		&Tsetxattr{
+			FID:   1,
+			Name:  "abc",
+			Value: "xyz",
+			Flags: 2,
 		},
-		&Rxattrcreate{},
+		&Rsetxattr{},
 		&Treaddir{
 			Directory: 1,
 			Offset:    2,

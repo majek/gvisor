@@ -889,27 +889,32 @@ func (t *Tallocate) handle(cs *connState) message {
 }
 
 // handle implements handler.handle.
-func (t *Txattrwalk) handle(cs *connState) message {
+func (t *Tgetxattr) handle(cs *connState) message {
 	ref, ok := cs.LookupFID(t.FID)
 	if !ok {
 		return newErr(syscall.EBADF)
 	}
 	defer ref.DecRef()
 
-	// We don't support extended attributes.
-	return newErr(syscall.ENODATA)
+	val, err := ref.file.GetXattr(t.Name)
+	if err != nil {
+		return newErr(err)
+	}
+	return &Rgetxattr{Value: val}
 }
 
 // handle implements handler.handle.
-func (t *Txattrcreate) handle(cs *connState) message {
+func (t *Tsetxattr) handle(cs *connState) message {
 	ref, ok := cs.LookupFID(t.FID)
 	if !ok {
 		return newErr(syscall.EBADF)
 	}
 	defer ref.DecRef()
 
-	// We don't support extended attributes.
-	return newErr(syscall.ENOSYS)
+	if err := ref.file.SetXattr(t.Name, t.Value, t.Flags); err != nil {
+		return newErr(err)
+	}
+	return &Rsetxattr{}
 }
 
 // handle implements handler.handle.

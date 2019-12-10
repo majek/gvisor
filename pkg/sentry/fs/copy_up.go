@@ -400,7 +400,7 @@ func copyAttributesLocked(ctx context.Context, upper *Inode, lower *Inode) error
 	if err != nil {
 		return err
 	}
-	lowerXattr, err := lower.Listxattr()
+	lowerXattr, err := lower.ListXattr(ctx)
 	if err != nil && err != syserror.EOPNOTSUPP {
 		return err
 	}
@@ -421,11 +421,11 @@ func copyAttributesLocked(ctx context.Context, upper *Inode, lower *Inode) error
 		if isXattrOverlay(name) {
 			continue
 		}
-		value, err := lower.Getxattr(name)
+		value, err := lower.GetXattr(ctx, name)
 		if err != nil {
 			return err
 		}
-		if err := upper.InodeOperations.Setxattr(upper, name, value); err != nil {
+		if err := upper.InodeOperations.SetXattr(ctx, upper, name, value, 0 /* flags */); err != nil {
 			return err
 		}
 	}

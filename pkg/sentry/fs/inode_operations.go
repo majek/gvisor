@@ -170,20 +170,20 @@ type InodeOperations interface {
 	// file system events.
 	UnstableAttr(ctx context.Context, inode *Inode) (UnstableAttr, error)
 
-	// Getxattr retrieves the value of extended attribute name. Inodes that
-	// do not support extended attributes return EOPNOTSUPP. Inodes that
-	// support extended attributes but don't have a value at name return
+	// GetXattr retrieves the value of extended attribute specified by name.
+	// Inodes that do not support extended attributes return EOPNOTSUPP. Inodes
+	// that support extended attributes but don't have a value at name return
 	// ENODATA.
-	Getxattr(inode *Inode, name string) (string, error)
+	GetXattr(ctx context.Context, inode *Inode, name string) (string, error)
 
-	// Setxattr sets the value of extended attribute name. Inodes that
-	// do not support extended attributes return EOPNOTSUPP.
-	Setxattr(inode *Inode, name, value string) error
+	// SetXattr sets the value of extended attribute specified by name. Inodes
+	// that do not support extended attributes return EOPNOTSUPP.
+	SetXattr(ctx context.Context, inode *Inode, name, value string, flags uint32) error
 
-	// Listxattr returns the set of all extended attributes names that
+	// ListXattr returns the set of all extended attributes names that
 	// have values. Inodes that do not support extended attributes return
 	// EOPNOTSUPP.
-	Listxattr(inode *Inode) (map[string]struct{}, error)
+	ListXattr(ctx context.Context, inode *Inode) (map[string]struct{}, error)
 
 	// Check determines whether an Inode can be accessed with the
 	// requested permission mask using the context (which gives access
