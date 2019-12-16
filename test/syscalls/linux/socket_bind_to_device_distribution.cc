@@ -183,7 +183,12 @@ TEST_P(BindToDeviceDistributionTest, Tcp) {
             }
             // Receive some data from a socket to be sure that the connect()
             // system call has been completed on another side.
-            int data;
+            // Do a short read and then close the socket to trigger a RST. This
+            // ensures that both ends of the connection are cleaned up and no
+            // goroutines hang around in TIME-WAIT. We do this so that this test
+            // does not timeout under gotsan runs where lots of goroutines can
+            // cause the test to use absurd amounts of memory.
+            uint16_t data;
             EXPECT_THAT(
                 RetryEINTR(recv)(fd.ValueOrDie().get(), &data, sizeof(data), 0),
                 SyscallSucceedsWithValue(sizeof(data)));
@@ -198,13 +203,22 @@ TEST_P(BindToDeviceDistributionTest, Tcp) {
   }
 
   for (int i = 0; i < kConnectAttempts; i++) {
-    FileDescriptor const fd = ASSERT_NO_ERRNO_AND_VALUE(
+    const FileDescriptor fd = ASSERT_NO_ERRNO_AND_VALUE(
         Socket(connector.family(), SOCK_STREAM, IPPROTO_TCP));
     ASSERT_THAT(
         RetryEINTR(connect)(fd.get(), reinterpret_cast<sockaddr*>(&conn_addr),
                             connector.addr_len),
         SyscallSucceeds());
 
+    // Do two separate sends to ensure two segments are received. This is
+    // required for netstack where read is incorrectly assuming a whole
+    // segment is read when endpoint.Read() is called which is technically
+    // incorrect as the syscall that invoked endpoint.Read() may only
+    // consume it partially. This results in a case where a close() of
+    // such a socket does not trigger a RST in netstack due to the
+    // endpoint assuming that the endpoint has no unread data.
+    EXPECT_THAT(RetryEINTR(send)(fd.get(), &i, sizeof(i), 0),
+                SyscallSucceedsWithValue(sizeof(i)));
     EXPECT_THAT(RetryEINTR(send)(fd.get(), &i, sizeof(i), 0),
                 SyscallSucceedsWithValue(sizeof(i)));
   }

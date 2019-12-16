@@ -293,7 +293,6 @@ func TestTCPResetSentForACKWhenNotUsingSynCookies(t *testing.T) {
 		checker.SeqNum(uint32(c.IRS+1)),
 		checker.AckNum(uint32(iss)+1),
 		checker.TCPFlags(header.TCPFlagFin|header.TCPFlagAck)))
-
 	finHeaders := &context.Headers{
 		SrcPort: context.TestPort,
 		DstPort: context.StackPort,
@@ -459,6 +458,9 @@ func TestConnectResetAfterClose(t *testing.T) {
 		checker.IPv4(t, b,
 			checker.TCP(
 				checker.DstPort(context.TestPort),
+				// RST is always generated with sndNxt which if the FIN
+				// has been sent will be 1 higher than the sequence number
+				// of the FIN itself.
 				checker.SeqNum(uint32(c.IRS)+2),
 				checker.AckNum(0),
 				checker.TCPFlags(header.TCPFlagRst),
@@ -1500,6 +1502,9 @@ func TestRstOnCloseWithUnreadDataFinConvertRst(t *testing.T) {
 		checker.TCP(
 			checker.DstPort(context.TestPort),
 			checker.TCPFlags(header.TCPFlagAck|header.TCPFlagRst),
+			// RST is always generated with sndNxt which if the FIN
+			// has been sent will be 1 higher than the sequence
+			// number of the FIN itself.
 			checker.SeqNum(uint32(c.IRS)+2),
 		))
 	// The RST puts the endpoint into an error state.
@@ -2110,6 +2115,7 @@ func TestZeroScaledWindowReceive(t *testing.T) {
 }
 
 func TestSegmentMerging(t *testing.T) {
+	t.Skip("test needs to be rewritten as Write() merging won't work due to inline flushing of write queues")
 	tests := []struct {
 		name   string
 		stop   func(tcpip.Endpoint)
@@ -5442,6 +5448,7 @@ func TestReceiveBufferAutoTuningApplicationLimited(t *testing.T) {
 		rawEP.SendPacketWithTS(b[start:start+mss], tsVal)
 		packetsSent++
 	}
+
 	// Resume the worker so that it only sees the packets once all of them
 	// are waiting to be read.
 	worker.ResumeWork()
@@ -5509,7 +5516,7 @@ func TestReceiveBufferAutoTuning(t *testing.T) {
 	stk := c.Stack()
 	// Set lower limits for auto-tuning tests. This is required because the
 	// test stops the worker which can cause packets to be dropped because
-	// the segment queue holding unprocessed packets is limited to 500.
+	// the segment queue holding unprocessed packets is limited to 300.
 	const receiveBufferSize = 80 << 10 // 80KB.
 	const maxReceiveBufferSize = receiveBufferSize * 10
 	if err := stk.SetTransportProtocolOption(tcp.ProtocolNumber, tcp.ReceiveBufferSizeOption{1, receiveBufferSize, maxReceiveBufferSize}); err != nil {
@@ -5564,6 +5571,7 @@ func TestReceiveBufferAutoTuning(t *testing.T) {
 			totalSent += mss
 			packetsSent++
 		}
+
 		// Resume it so that it only sees the packets once all of them
 		// are waiting to be read.
 		worker.ResumeWork()

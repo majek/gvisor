@@ -21,6 +21,7 @@
 package tcp
 
 import (
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -94,7 +95,7 @@ const (
 )
 
 type protocol struct {
-	mu                         sync.Mutex
+	mu                         sync.RWMutex
 	sackEnabled                bool
 	delayEnabled               bool
 	sendBufferSize             SendBufferSizeOption
@@ -104,6 +105,7 @@ type protocol struct {
 	moderateReceiveBuffer      bool
 	tcpLingerTimeout           time.Duration
 	tcpTimeWaitTimeout         time.Duration
+	dispatcher                 *dispatcher
 }
 
 // Number returns the tcp protocol number.
@@ -132,6 +134,14 @@ func (*protocol) MinimumPacketSize() int {
 func (*protocol) ParsePorts(v buffer.View) (src, dst uint16, err *tcpip.Error) {
 	h := header.TCP(v)
 	return h.SourcePort(), h.DestinationPort(), nil
+}
+
+// QueuePacket queues packets targeted at an endpoint after hashing the packet
+// to a specific processing queue. Each queue is serviced by its own processor
+// goroutine which is responsible for dequeuing and doing full TCP dispatch of
+// the packet.
+func (p *protocol) QueuePacket(r *stack.Route, ep stack.TransportEndpoint, id stack.TransportEndpointID, pkt tcpip.PacketBuffer) {
+	p.dispatcher.queuePacket(r, ep, id, pkt)
 }
 
 // HandleUnknownDestinationPacket handles packets targeted at this protocol but
@@ -263,57 +273,57 @@ func (p *protocol) SetOption(option interface{}) *tcpip.Error {
 func (p *protocol) Option(option interface{}) *tcpip.Error {
 	switch v := option.(type) {
 	case *SACKEnabled:
-		p.mu.Lock()
+		p.mu.RLock()
 		*v = SACKEnabled(p.sackEnabled)
-		p.mu.Unlock()
+		p.mu.RUnlock()
 		return nil
 
 	case *DelayEnabled:
-		p.mu.Lock()
+		p.mu.RLock()
 		*v = DelayEnabled(p.delayEnabled)
-		p.mu.Unlock()
+		p.mu.RUnlock()
 		return nil
 
 	case *SendBufferSizeOption:
-		p.mu.Lock()
+		p.mu.RLock()
 		*v = p.sendBufferSize
-		p.mu.Unlock()
+		p.mu.RUnlock()
 		return nil
 
 	case *ReceiveBufferSizeOption:
-		p.mu.Lock()
+		p.mu.RLock()
 		*v = p.recvBufferSize
-		p.mu.Unlock()
+		p.mu.RUnlock()
 		return nil
 
 	case *tcpip.CongestionControlOption:
-		p.mu.Lock()
+		p.mu.RLock()
 		*v = tcpip.CongestionControlOption(p.congestionControl)
-		p.mu.Unlock()
+		p.mu.RUnlock()
 		return nil
 
 	case *tcpip.AvailableCongestionControlOption:
-		p.mu.Lock()
+		p.mu.RLock()
 		*v = tcpip.AvailableCongestionControlOption(strings.Join(p.availableCongestionControl, " "))
-		p.mu.Unlock()
+		p.mu.RUnlock()
 		return nil
 
 	case *tcpip.ModerateReceiveBufferOption:
-		p.mu.Lock()
+		p.mu.RLock()
 		*v = tcpip.ModerateReceiveBufferOption(p.moderateReceiveBuffer)
-		p.mu.Unlock()
+		p.mu.RUnlock()
 		return nil
 
 	case *tcpip.TCPLingerTimeoutOption:
-		p.mu.Lock()
+		p.mu.RLock()
 		*v = tcpip.TCPLingerTimeoutOption(p.tcpLingerTimeout)
-		p.mu.Unlock()
+		p.mu.RUnlock()
 		return nil
 
 	case *tcpip.TCPTimeWaitTimeoutOption:
-		p.mu.Lock()
+		p.mu.RLock()
 		*v = tcpip.TCPTimeWaitTimeoutOption(p.tcpTimeWaitTimeout)
-		p.mu.Unlock()
+		p.mu.RUnlock()
 		return nil
 
 	default:
@@ -330,5 +340,6 @@ func NewProtocol() stack.TransportProtocol {
 		availableCongestionControl: []string{ccReno, ccCubic},
 		tcpLingerTimeout:           DefaultTCPLingerTimeout,
 		tcpTimeWaitTimeout:         DefaultTCPTimeWaitTimeout,
+		dispatcher:                 newDispatcher(runtime.GOMAXPROCS(0)),
 	}
 }

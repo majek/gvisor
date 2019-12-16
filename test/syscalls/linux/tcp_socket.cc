@@ -800,18 +800,42 @@ TEST_P(TcpSocketTest, FullBuffer) {
     iov.iov_len = sizeof(data);
     iovecs.push_back(iov);
   }
-  ScopedThread t([this, &iovecs]() {
+  int write_size = sizeof(data) * iovecs.size();
+  ScopedThread t([this, &iovecs, write_size]() {
     int result = -1;
     EXPECT_THAT(result = RetryEINTR(writev)(s_, iovecs.data(), iovecs.size()),
                 SyscallSucceeds());
-    EXPECT_GT(result, 1);
-    EXPECT_LT(result, sizeof(data) * iovecs.size());
+    EXPECT_EQ(result, write_size);
   });
 
-  char recv = 0;
-  EXPECT_THAT(RetryEINTR(read)(t_, &recv, 1), SyscallSucceedsWithValue(1));
+  // Read all the data and make sure it matches what we wrote.
+  char recv[4096];
+  int nRead = 0;
+  while (nRead < write_size) {
+    auto n = RetryEINTR(read)(t_, &recv, sizeof(recv));
+    ASSERT_GE(n, 0);
+    nRead += n;
+    if (n == 0) {
+      break;
+    }
+  }
+  ASSERT_EQ(nRead, write_size);
   EXPECT_THAT(close(t_), SyscallSucceedsWithValue(0));
   t_ = -1;
+}
+
+TEST_P(TcpSocketTest, PollAfterShutdown) {
+  ScopedThread client_thread([this]() {
+    EXPECT_THAT(shutdown(s_, SHUT_WR), SyscallSucceedsWithValue(0));
+    struct pollfd poll_fd = {s_, POLLIN | POLLERR | POLLHUP, 0};
+    EXPECT_THAT(RetryEINTR(poll)(&poll_fd, 1, 10000),
+                SyscallSucceedsWithValue(1));
+  });
+
+  EXPECT_THAT(shutdown(t_, SHUT_WR), SyscallSucceedsWithValue(0));
+  struct pollfd poll_fd = {t_, POLLIN | POLLERR | POLLHUP, 0};
+  EXPECT_THAT(RetryEINTR(poll)(&poll_fd, 1, 10000),
+              SyscallSucceedsWithValue(1));
 }
 
 TEST_P(SimpleTcpSocketTest, NonBlockingConnectNoListener) {

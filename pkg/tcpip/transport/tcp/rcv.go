@@ -91,14 +91,19 @@ func (r *receiver) getSendParams() (rcvNxt seqnum.Value, rcvWnd seqnum.Size) {
 	// Stash away the non-scaled receive window as we use it for measuring
 	// receiver's estimated RTT.
 	r.rcvWnd = r.rcvNxt.Size(r.rcvAcc)
-	return r.rcvNxt, r.rcvWnd >> r.rcvWndScale
+	rcvWnd = r.rcvWnd
+	// if r.rcvWnd < seqnum.Size(r.ep.amss) {
+	// 	rcvWnd = 0
+	// }
+	return r.rcvNxt, rcvWnd >> r.rcvWndScale
 }
 
 // nonZeroWindow is called when the receive window grows from zero to nonzero;
 // in such cases we may need to send an ack to indicate to our peer that it can
 // resume sending data.
 func (r *receiver) nonZeroWindow() {
-	if (r.rcvAcc-r.rcvNxt)>>r.rcvWndScale != 0 {
+	wnd := (r.rcvAcc - r.rcvNxt) >> r.rcvWndScale
+	if wnd > seqnum.Value(r.ep.amss) {
 		// We never got around to announcing a zero window size, so we
 		// don't need to immediately announce a nonzero one.
 		return
@@ -174,22 +179,20 @@ func (r *receiver) consumeSegment(s *segment, segSeq seqnum.Value, segLen seqnum
 
 		// We just received a FIN, our next state depends on whether we sent a
 		// FIN already or not.
-		r.ep.mu.Lock()
-		switch r.ep.state {
+		switch r.ep.EndpointState() {
 		case StateEstablished:
-			r.ep.state = StateCloseWait
+			r.ep.setEndpointState(StateCloseWait)
 		case StateFinWait1:
 			if s.flagIsSet(header.TCPFlagAck) {
 				// FIN-ACK, transition to TIME-WAIT.
-				r.ep.state = StateTimeWait
+				r.ep.setEndpointState(StateTimeWait)
 			} else {
 				// Simultaneous close, expecting a final ACK.
-				r.ep.state = StateClosing
+				r.ep.setEndpointState(StateClosing)
 			}
 		case StateFinWait2:
-			r.ep.state = StateTimeWait
+			r.ep.setEndpointState(StateTimeWait)
 		}
-		r.ep.mu.Unlock()
 
 		// Flush out any pending segments, except the very first one if
 		// it happens to be the one we're handling now because the
@@ -210,21 +213,19 @@ func (r *receiver) consumeSegment(s *segment, segSeq seqnum.Value, segLen seqnum
 	// Handle ACK (not FIN-ACK, which we handled above) during one of the
 	// shutdown states.
 	if s.flagIsSet(header.TCPFlagAck) && s.ackNumber == r.ep.snd.sndNxt {
-		r.ep.mu.Lock()
-		switch r.ep.state {
+		switch r.ep.EndpointState() {
 		case StateFinWait1:
-			r.ep.state = StateFinWait2
+			r.ep.setEndpointState(StateFinWait2)
 			// Notify protocol goroutine that we have received an
 			// ACK to our FIN so that it can start the FIN_WAIT2
 			// timer to abort connection if the other side does
 			// not close within 2MSL.
 			r.ep.notifyProtocolGoroutine(notifyClose)
 		case StateClosing:
-			r.ep.state = StateTimeWait
+			r.ep.setEndpointState(StateTimeWait)
 		case StateLastAck:
 			r.ep.transitionToStateCloseLocked()
 		}
-		r.ep.mu.Unlock()
 	}
 
 	return true
@@ -273,7 +274,6 @@ func (r *receiver) handleRcvdSegmentClosing(s *segment, state EndpointState, clo
 	switch state {
 	case StateCloseWait, StateClosing, StateLastAck:
 		if !s.sequenceNumber.LessThanEq(r.rcvNxt) {
-			s.decRef()
 			// Just drop the segment as we have
 			// already received a FIN and this
 			// segment is after the sequence number
@@ -290,7 +290,6 @@ func (r *receiver) handleRcvdSegmentClosing(s *segment, state EndpointState, clo
 		// trigger a RST.
 		endDataSeq := s.sequenceNumber.Add(seqnum.Size(s.data.Size()))
 		if rcvClosed && r.rcvNxt.LessThan(endDataSeq) {
-			s.decRef()
 			return true, tcpip.ErrConnectionAborted
 		}
 		if state == StateFinWait1 {
@@ -320,7 +319,6 @@ func (r *receiver) handleRcvdSegmentClosing(s *segment, state EndpointState, clo
 		// the last actual data octet in a segment in
 		// which it occurs.
 		if closed && (!s.flagIsSet(header.TCPFlagFin) || s.sequenceNumber.Add(s.logicalLen()) != r.rcvNxt+1) {
-			s.decRef()
 			return true, tcpip.ErrConnectionAborted
 		}
 	}
@@ -341,10 +339,8 @@ func (r *receiver) handleRcvdSegmentClosing(s *segment, state EndpointState, clo
 // handleRcvdSegment handles TCP segments directed at the connection managed by
 // r as they arrive. It is called by the protocol main loop.
 func (r *receiver) handleRcvdSegment(s *segment) (drop bool, err *tcpip.Error) {
-	r.ep.mu.RLock()
-	state := r.ep.state
+	state := r.ep.EndpointState()
 	closed := r.ep.closed
-	r.ep.mu.RUnlock()
 
 	if state != StateEstablished {
 		drop, err := r.handleRcvdSegmentClosing(s, state, closed)
