@@ -28,6 +28,9 @@ apt-get update && apt-get install -y rsync coreutils python-psutil qemu-kvm pyth
 # junitparser is used to merge junit xml files.
 pip install junitparser
 
+# the paramiko library is problematic with bazel.
+pip3 install paramiko
+
 # We need a kbuilder user.
 if useradd -c "kbuilder user" -m -s /bin/bash kbuilder; then
     # User was added successfully; we add the relevant SSH keys here.
