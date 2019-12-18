@@ -10,6 +10,7 @@ exports_files(
     [
         "socket.cc",
         "socket_ip_loopback_blocking.cc",
+        "socket_ip_tcp_loopback.cc",
         "socket_ipv4_udp_unbound_loopback.cc",
         "tcp_socket.cc",
         "udp_socket.cc",
@@ -2126,6 +2127,22 @@ cc_library(
         "@com_google_googletest//:gtest",
     ],
     alwayslink = 1,
+)
+
+cc_binary(
+    name = "socket_stress_test",
+    testonly = 1,
+    srcs = [
+        "socket_generic_stress.cc",
+    ],
+    linkstatic = 1,
+    deps = [
+        ":ip_socket_test_util",
+        ":socket_test_util",
+        "//test/util:test_main",
+        "//test/util:test_util",
+        "@com_google_googletest//:gtest",
+    ],
 )
 
 cc_library(
