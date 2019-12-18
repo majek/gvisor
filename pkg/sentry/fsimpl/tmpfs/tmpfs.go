@@ -12,12 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package memfs provides a filesystem implementation that behaves like tmpfs:
+// Package tmpfs provides a filesystem implementation that behaves like tmpfs:
 // the Dentry tree is the sole source of truth for the state of the filesystem.
-//
-// memfs is intended primarily to demonstrate filesystem implementation
-// patterns. Real uses cases for an in-memory filesystem should use tmpfs
-// instead.
 //
 // Lock order:
 //
@@ -25,7 +21,7 @@
 //   regularFileFD.offMu
 //     regularFile.mu
 //   inode.mu
-package memfs
+package tmpfs
 
 import (
 	"fmt"
@@ -79,11 +75,11 @@ type dentry struct {
 	// immutable.
 	inode *inode
 
-	// memfs doesn't count references on dentries; because the dentry tree is
+	// tmpfs doesn't count references on dentries; because the dentry tree is
 	// the sole source of truth, it is by definition always consistent with the
 	// state of the filesystem. However, it does count references on inodes,
 	// because inode resources are released when all references are dropped.
-	// (memfs doesn't really have resources to release, but we implement
+	// (tmpfs doesn't really have resources to release, but we implement
 	// reference counting because tmpfs regular files will.)
 
 	// dentryEntry (ugh) links dentries into their parent directory.childList.
@@ -150,7 +146,7 @@ func (i *inode) init(impl interface{}, fs *filesystem, creds *auth.Credentials, 
 // Preconditions: filesystem.mu must be locked for writing.
 func (i *inode) incLinksLocked() {
 	if atomic.AddUint32(&i.nlink, 1) <= 1 {
-		panic("memfs.inode.incLinksLocked() called with no existing links")
+		panic("tmpfs.inode.incLinksLocked() called with no existing links")
 	}
 }
 
@@ -159,13 +155,13 @@ func (i *inode) decLinksLocked() {
 	if nlink := atomic.AddUint32(&i.nlink, ^uint32(0)); nlink == 0 {
 		i.decRef()
 	} else if nlink == ^uint32(0) { // negative overflow
-		panic("memfs.inode.decLinksLocked() called with no existing links")
+		panic("tmpfs.inode.decLinksLocked() called with no existing links")
 	}
 }
 
 func (i *inode) incRef() {
 	if atomic.AddInt64(&i.refs, 1) <= 1 {
-		panic("memfs.inode.incRef() called without holding a reference")
+		panic("tmpfs.inode.incRef() called without holding a reference")
 	}
 }
 
@@ -184,14 +180,14 @@ func (i *inode) tryIncRef() bool {
 func (i *inode) decRef() {
 	if refs := atomic.AddInt64(&i.refs, -1); refs == 0 {
 		// This is unnecessary; it's mostly to simulate what tmpfs would do.
-		if regfile, ok := i.impl.(*regularFile); ok {
-			regfile.mu.Lock()
-			regfile.data = nil
-			atomic.StoreInt64(&regfile.dataLen, 0)
-			regfile.mu.Unlock()
+		if regFile, ok := i.impl.(*regularFile); ok {
+			regFile.mu.Lock()
+			regFile.data.DropAll(regFile.memFile)
+			atomic.StoreUint64(&regFile.size, 0)
+			regFile.mu.Unlock()
 		}
 	} else if refs < 0 {
-		panic("memfs.inode.decRef() called without holding a reference")
+		panic("tmpfs.inode.decRef() called without holding a reference")
 	}
 }
 
@@ -215,7 +211,7 @@ func (i *inode) statTo(stat *linux.Statx) {
 	case *regularFile:
 		stat.Mode |= linux.S_IFREG
 		stat.Mask |= linux.STATX_SIZE | linux.STATX_BLOCKS
-		stat.Size = uint64(atomic.LoadInt64(&impl.dataLen))
+		stat.Size = uint64(atomic.LoadUint64(&impl.size))
 		// In tmpfs, this will be FileRangeSet.Span() / 512 (but also cached in
 		// a uint64 accessed using atomic memory operations to avoid taking
 		// locks).
@@ -256,7 +252,7 @@ func (i *inode) direntType() uint8 {
 	}
 }
 
-// fileDescription is embedded by memfs implementations of
+// fileDescription is embedded by tmpfs implementations of
 // vfs.FileDescriptionImpl.
 type fileDescription struct {
 	vfsfd vfs.FileDescription

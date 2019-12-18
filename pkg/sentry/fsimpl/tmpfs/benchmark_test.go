@@ -26,7 +26,7 @@ import (
 	"gvisor.dev/gvisor/pkg/sentry/context/contexttest"
 	"gvisor.dev/gvisor/pkg/sentry/fs"
 	_ "gvisor.dev/gvisor/pkg/sentry/fs/tmpfs"
-	"gvisor.dev/gvisor/pkg/sentry/fsimpl/memfs"
+	"gvisor.dev/gvisor/pkg/sentry/fsimpl/tmpfs"
 	"gvisor.dev/gvisor/pkg/sentry/kernel/auth"
 	"gvisor.dev/gvisor/pkg/sentry/vfs"
 	"gvisor.dev/gvisor/pkg/syserror"
@@ -175,8 +175,8 @@ func BenchmarkVFS2MemfsStat(b *testing.B) {
 
 			// Create VFS.
 			vfsObj := vfs.New()
-			vfsObj.MustRegisterFilesystemType("memfs", memfs.FilesystemType{})
-			mntns, err := vfsObj.NewMountNamespace(ctx, creds, "", "memfs", &vfs.GetFilesystemOptions{})
+			vfsObj.MustRegisterFilesystemType("tmpfs", tmpfs.FilesystemType{})
+			mntns, err := vfsObj.NewMountNamespace(ctx, creds, "", "tmpfs", &vfs.GetFilesystemOptions{})
 			if err != nil {
 				b.Fatalf("failed to create tmpfs root mount: %v", err)
 			}
@@ -364,8 +364,8 @@ func BenchmarkVFS2MemfsMountStat(b *testing.B) {
 
 			// Create VFS.
 			vfsObj := vfs.New()
-			vfsObj.MustRegisterFilesystemType("memfs", memfs.FilesystemType{})
-			mntns, err := vfsObj.NewMountNamespace(ctx, creds, "", "memfs", &vfs.GetFilesystemOptions{})
+			vfsObj.MustRegisterFilesystemType("tmpfs", tmpfs.FilesystemType{})
+			mntns, err := vfsObj.NewMountNamespace(ctx, creds, "", "tmpfs", &vfs.GetFilesystemOptions{})
 			if err != nil {
 				b.Fatalf("failed to create tmpfs root mount: %v", err)
 			}
@@ -394,7 +394,7 @@ func BenchmarkVFS2MemfsMountStat(b *testing.B) {
 			}
 			defer mountPoint.DecRef()
 			// Create and mount the submount.
-			if err := vfsObj.MountAt(ctx, creds, "", &pop, "memfs", &vfs.MountOptions{}); err != nil {
+			if err := vfsObj.MountAt(ctx, creds, "", &pop, "tmpfs", &vfs.MountOptions{}); err != nil {
 				b.Fatalf("failed to mount tmpfs submount: %v", err)
 			}
 			filePathBuilder.WriteString(mountPointName)

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memfs
+package tmpfs
 
 import (
 	"fmt"
@@ -44,7 +44,7 @@ afterSymlink:
 		return nil, nil, err
 	}
 	if nextVFSD == nil {
-		// Since the Dentry tree is the sole source of truth for memfs, if it's
+		// Since the Dentry tree is the sole source of truth for tmpfs, if it's
 		// not in the Dentry tree, it doesn't exist.
 		return nil, nil, syserror.ENOENT
 	}
@@ -280,7 +280,7 @@ func (fs *filesystem) MknodAt(ctx context.Context, rp *vfs.ResolvingPath, opts v
 
 // OpenAt implements vfs.FilesystemImpl.OpenAt.
 func (fs *filesystem) OpenAt(ctx context.Context, rp *vfs.ResolvingPath, opts vfs.OpenOptions) (*vfs.FileDescription, error) {
-	// Filter out flags that are not supported by memfs. O_DIRECTORY and
+	// Filter out flags that are not supported by tmpfs. O_DIRECTORY and
 	// O_NOFOLLOW have no effect here (they're handled by VFS by setting
 	// appropriate bits in rp), but are returned by
 	// FileDescriptionImpl.StatusFlags(). O_NONBLOCK is supported only by
@@ -350,7 +350,7 @@ afterTrailingSymlink:
 		}
 		defer rp.Mount().EndWrite()
 		// Create and open the child.
-		childInode := fs.newRegularFile(rp.Credentials(), opts.Mode)
+		childInode := fs.newRegularFile(ctx, rp.Credentials(), opts.Mode)
 		child := fs.newDentry(childInode)
 		vfsd.InsertChild(&child.vfsd, pc)
 		inode.impl.(*directory).childList.PushBack(child)
@@ -398,8 +398,8 @@ func (i *inode) open(ctx context.Context, rp *vfs.ResolvingPath, vfsd *vfs.Dentr
 		fd.vfsfd.Init(&fd, mnt, vfsd)
 		if flags&linux.O_TRUNC != 0 {
 			impl.mu.Lock()
-			impl.data = impl.data[:0]
-			atomic.StoreInt64(&impl.dataLen, 0)
+			impl.data.Truncate(0, impl.memFile)
+			atomic.StoreUint64(&impl.size, 0)
 			impl.mu.Unlock()
 		}
 		return &fd.vfsfd, nil
