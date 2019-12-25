@@ -423,17 +423,25 @@ type Endpoint interface {
 	// SetSockOpt sets a socket option. opt should be one of the *Option types.
 	SetSockOpt(opt interface{}) *Error
 
+	// SetSockOptBool sets a socket option, for simple cases where a value
+	// has the bool type.
+	SetSockOptBool(opt SockOptBool, v bool) *Error
+
 	// SetSockOptInt sets a socket option, for simple cases where a value
 	// has the int type.
-	SetSockOptInt(opt SockOpt, v int) *Error
+	SetSockOptInt(opt SockOptInt, v int) *Error
 
 	// GetSockOpt gets a socket option. opt should be a pointer to one of the
 	// *Option types.
 	GetSockOpt(opt interface{}) *Error
 
+	// GetSockOptBool gets a socket option for simple cases where a return
+	// value has the bool type.
+	GetSockOptBool(SockOptBool) (bool, *Error)
+
 	// GetSockOptInt gets a socket option for simple cases where a return
 	// value has the int type.
-	GetSockOptInt(SockOpt) (int, *Error)
+	GetSockOptInt(SockOptInt) (int, *Error)
 
 	// State returns a socket's lifecycle state. The returned value is
 	// protocol-specific and is primarily used for diagnostics.
@@ -488,13 +496,22 @@ type WriteOptions struct {
 	Atomic bool
 }
 
-// SockOpt represents socket options which values have the int type.
-type SockOpt int
+// SockOptBool represents socket options which values have the bool type.
+type SockOptBool int
+
+const (
+	// V6OnlyOption is used by {G,S}etSockOptBool to specify whether an IPv6
+	// socket is to be restricted to sending and receiving IPv6 packets only.
+	V6OnlyOption SockOptBool = iota
+)
+
+// SockOptInt represents socket options which values have the int type.
+type SockOptInt int
 
 const (
 	// ReceiveQueueSizeOption is used in GetSockOptInt to specify that the
 	// number of unread bytes in the input buffer should be returned.
-	ReceiveQueueSizeOption SockOpt = iota
+	ReceiveQueueSizeOption SockOptInt = iota
 
 	// SendBufferSizeOption is used by SetSockOptInt/GetSockOptInt to
 	// specify the send buffer size option.
@@ -520,10 +537,6 @@ const (
 // ErrorOption is used in GetSockOpt to specify that the last error reported by
 // the endpoint should be cleared and returned.
 type ErrorOption struct{}
-
-// V6OnlyOption is used by SetSockOpt/GetSockOpt to specify whether an IPv6
-// socket is to be restricted to sending and receiving IPv6 packets only.
-type V6OnlyOption int
 
 // CorkOption is used by SetSockOpt/GetSockOpt to specify if data should be
 // held until segments are full by the TCP transport protocol.

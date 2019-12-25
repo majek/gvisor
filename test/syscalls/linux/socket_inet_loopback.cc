@@ -102,6 +102,63 @@ TEST(BadSocketPairArgs, ValidateErrForBadCallsToSocketPair) {
               SyscallFailsWithErrno(EAFNOSUPPORT));
 }
 
+using DualStackSocketTest = ::testing::TestWithParam<TestAddress>;
+
+TEST_P(DualStackSocketTest, BindConnectSendto) {
+  const FileDescriptor fd =
+      ASSERT_NO_ERRNO_AND_VALUE(Socket(AF_INET6, SOCK_DGRAM, 0));
+
+  auto const& addr = GetParam();
+
+  int bind_ret = bind(fd.get(), reinterpret_cast<const sockaddr*>(&addr.addr),
+                      addr.addr_len);
+  // `connect` and `sendto` need a port number. If bind succeeded, we can use
+  // the one we bound to. If not, we can make one up.
+  if (addr.family() == AF_INET6) {
+    EXPECT_THAT(bind_ret, SyscallSucceeds());
+
+    socklen_t addrlen = addr.addr_len;
+    ASSERT_THAT(getsockname(fd.get(),
+                            const_cast<sockaddr*>(
+                                reinterpret_cast<const sockaddr*>(&addr.addr)),
+                            &addrlen),
+                SyscallSucceeds());
+    ASSERT_EQ(addrlen, addr.addr_len);
+  } else {
+    EXPECT_THAT(bind_ret, SyscallFailsWithErrno(EINVAL));
+
+    ASSERT_NO_ERRNO(SetAddrPort(
+        addr.family(), const_cast<sockaddr_storage*>(&addr.addr), 1337));
+  }
+
+  // TODO(gvisor.dev/issue/1490): connect before sendto.
+  bool issue_1490 = addr.family() != AF_INET6 && IsRunningOnGvisor();
+  if (!issue_1490) {
+    EXPECT_THAT(connect(fd.get(), reinterpret_cast<const sockaddr*>(&addr.addr),
+                        addr.addr_len),
+                SyscallSucceeds());
+  }
+
+  const char payload[] = "hello";
+  EXPECT_THAT(
+      sendto(fd.get(), &payload, sizeof(payload), 0,
+             reinterpret_cast<const sockaddr*>(&addr.addr), addr.addr_len),
+      SyscallSucceedsWithValue(sizeof(payload)));
+
+  if (issue_1490) {
+    EXPECT_THAT(connect(fd.get(), reinterpret_cast<const sockaddr*>(&addr.addr),
+                        addr.addr_len),
+                SyscallSucceeds());
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(All, DualStackSocketTest,
+                         ::testing::Values(V4Loopback(), V4MappedLoopback(),
+                                           V6Loopback()),
+                         [](::testing::TestParamInfo<TestAddress> const& info) {
+                           return info.param.description;
+                         });
+
 void tcpSimpleConnectTest(TestAddress const& listener,
                           TestAddress const& connector, bool unbound) {
   // Create the listening socket.

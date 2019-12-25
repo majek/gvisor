@@ -222,17 +222,25 @@ type commonEndpoint interface {
 	// transport.Endpoint.SetSockOpt.
 	SetSockOpt(interface{}) *tcpip.Error
 
+	// SetSockOptBool implements tcpip.Endpoint.SetSockOptBool and
+	// transport.Endpoint.SetSockOptBool.
+	SetSockOptBool(opt tcpip.SockOptBool, v bool) *tcpip.Error
+
 	// SetSockOptInt implements tcpip.Endpoint.SetSockOptInt and
 	// transport.Endpoint.SetSockOptInt.
-	SetSockOptInt(opt tcpip.SockOpt, v int) *tcpip.Error
+	SetSockOptInt(opt tcpip.SockOptInt, v int) *tcpip.Error
 
 	// GetSockOpt implements tcpip.Endpoint.GetSockOpt and
 	// transport.Endpoint.GetSockOpt.
 	GetSockOpt(interface{}) *tcpip.Error
 
+	// GetSockOptBool implements tcpip.Endpoint.GetSockOptBool and
+	// transport.Endpoint.GetSockOpt.
+	GetSockOptBool(opt tcpip.SockOptBool) (bool, *tcpip.Error)
+
 	// GetSockOptInt implements tcpip.Endpoint.GetSockOptInt and
 	// transport.Endpoint.GetSockOpt.
-	GetSockOptInt(opt tcpip.SockOpt) (int, *tcpip.Error)
+	GetSockOptInt(opt tcpip.SockOptInt) (int, *tcpip.Error)
 }
 
 // SocketOperations encapsulates all the state needed to represent a network stack
@@ -316,22 +324,15 @@ func bytesToIPAddress(addr []byte) tcpip.Address {
 // converts it to the FullAddress format. It supports AF_UNIX, AF_INET,
 // AF_INET6, and AF_PACKET addresses.
 //
-// strict indicates whether addresses with the AF_UNSPEC family are accepted of not.
-//
 // AddressAndFamily returns an address and its family.
-func AddressAndFamily(sfamily int, addr []byte, strict bool) (tcpip.FullAddress, uint16, *syserr.Error) {
+func AddressAndFamily(addr []byte) (tcpip.FullAddress, uint16, *syserr.Error) {
 	// Make sure we have at least 2 bytes for the address family.
 	if len(addr) < 2 {
 		return tcpip.FullAddress{}, 0, syserr.ErrInvalidArgument
 	}
 
-	family := usermem.ByteOrder.Uint16(addr)
-	if family != uint16(sfamily) && (strict || family != linux.AF_UNSPEC) {
-		return tcpip.FullAddress{}, family, syserr.ErrAddressFamilyNotSupported
-	}
-
 	// Get the rest of the fields based on the address family.
-	switch family {
+	switch family := usermem.ByteOrder.Uint16(addr); family {
 	case linux.AF_UNIX:
 		path := addr[2:]
 		if len(path) > linux.UnixPathMax {
@@ -630,10 +631,26 @@ func (s *SocketOperations) Readiness(mask waiter.EventMask) waiter.EventMask {
 	return r
 }
 
+func (s *SocketOperations) checkFamily(family uint16, exact bool) *syserr.Error {
+	if family == uint16(s.family) {
+		return nil
+	}
+	if !exact && family == linux.AF_INET && s.family == linux.AF_INET6 {
+		v, err := s.Endpoint.GetSockOptBool(tcpip.V6OnlyOption)
+		if err != nil {
+			return syserr.TranslateNetstackError(err)
+		}
+		if !v {
+			return nil
+		}
+	}
+	return syserr.ErrInvalidArgument
+}
+
 // Connect implements the linux syscall connect(2) for sockets backed by
 // tpcip.Endpoint.
 func (s *SocketOperations) Connect(t *kernel.Task, sockaddr []byte, blocking bool) *syserr.Error {
-	addr, family, err := AddressAndFamily(s.family, sockaddr, false /* strict */)
+	addr, family, err := AddressAndFamily(sockaddr)
 	if err != nil {
 		return err
 	}
@@ -645,6 +662,11 @@ func (s *SocketOperations) Connect(t *kernel.Task, sockaddr []byte, blocking boo
 		}
 		return syserr.TranslateNetstackError(err)
 	}
+
+	if err := s.checkFamily(family, false /* exact */); err != nil {
+		return err
+	}
+
 	// Always return right away in the non-blocking case.
 	if !blocking {
 		return syserr.TranslateNetstackError(s.Endpoint.Connect(addr))
@@ -673,8 +695,11 @@ func (s *SocketOperations) Connect(t *kernel.Task, sockaddr []byte, blocking boo
 // Bind implements the linux syscall bind(2) for sockets backed by
 // tcpip.Endpoint.
 func (s *SocketOperations) Bind(t *kernel.Task, sockaddr []byte) *syserr.Error {
-	addr, _, err := AddressAndFamily(s.family, sockaddr, true /* strict */)
+	addr, family, err := AddressAndFamily(sockaddr)
 	if err != nil {
+		return err
+	}
+	if err := s.checkFamily(family, true /* exact */); err != nil {
 		return err
 	}
 
@@ -1213,12 +1238,15 @@ func getSockOptIPv6(t *kernel.Task, ep commonEndpoint, name, outLen int) (interf
 			return nil, syserr.ErrInvalidArgument
 		}
 
-		var v tcpip.V6OnlyOption
-		if err := ep.GetSockOpt(&v); err != nil {
+		v, err := ep.GetSockOptBool(tcpip.V6OnlyOption)
+		if err != nil {
 			return nil, syserr.TranslateNetstackError(err)
 		}
-
-		return int32(v), nil
+		var o uint32
+		if v {
+			o = 1
+		}
+		return int32(o), nil
 
 	case linux.IPV6_PATHMTU:
 		t.Kernel().EmitUnimplementedEvent(t)
@@ -1621,7 +1649,7 @@ func setSockOptIPv6(t *kernel.Task, ep commonEndpoint, name int, optVal []byte) 
 		}
 
 		v := usermem.ByteOrder.Uint32(optVal)
-		return syserr.TranslateNetstackError(ep.SetSockOpt(tcpip.V6OnlyOption(v)))
+		return syserr.TranslateNetstackError(ep.SetSockOptBool(tcpip.V6OnlyOption, v != 0))
 
 	case linux.IPV6_ADD_MEMBERSHIP,
 		linux.IPV6_DROP_MEMBERSHIP,
@@ -2341,8 +2369,11 @@ func (s *SocketOperations) SendMsg(t *kernel.Task, src usermem.IOSequence, to []
 
 	var addr *tcpip.FullAddress
 	if len(to) > 0 {
-		addrBuf, _, err := AddressAndFamily(s.family, to, true /* strict */)
+		addrBuf, family, err := AddressAndFamily(to)
 		if err != nil {
+			return 0, err
+		}
+		if err := s.checkFamily(family, false /* exact */); err != nil {
 			return 0, err
 		}
 
