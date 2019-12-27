@@ -45,6 +45,11 @@ type tasksInode struct {
 
 	inoGen InoGenerator
 	pidns  *kernel.PIDNamespace
+
+	// '/proc/self' and '/proc/thread-self' have custom directory offsets in
+	// Linux. So handle them outside of OrderedChildren.
+	selfSymlink       *vfs.Dentry
+	threadSelfSymlink *vfs.Dentry
 }
 
 var _ kernfs.Inode = (*tasksInode)(nil)
@@ -54,20 +59,20 @@ func newTasksInode(inoGen InoGenerator, k *kernel.Kernel, pidns *kernel.PIDNames
 	contents := map[string]*kernfs.Dentry{
 		//"cpuinfo":     newCPUInfo(ctx, msrc),
 		//"filesystems": seqfile.NewSeqFileInode(ctx, &filesystemsData{}, msrc),
-		"loadavg":     newDentry(root, inoGen.NextIno(), defaultPermission, &loadavgData{}),
-		"meminfo":     newDentry(root, inoGen.NextIno(), defaultPermission, &meminfoData{k: k}),
-		"mounts":      kernfs.NewStaticSymlink(root, inoGen.NextIno(), defaultPermission, "self/mounts"),
-		"self":        newSelfSymlink(root, inoGen.NextIno(), defaultPermission, pidns),
-		"stat":        newDentry(root, inoGen.NextIno(), defaultPermission, &statData{k: k}),
-		"thread-self": newThreadSelfSymlink(root, inoGen.NextIno(), defaultPermission, pidns),
+		"loadavg": newDentry(root, inoGen.NextIno(), defaultPermission, &loadavgData{}),
+		"meminfo": newDentry(root, inoGen.NextIno(), defaultPermission, &meminfoData{k: k}),
+		"mounts":  kernfs.NewStaticSymlink(root, inoGen.NextIno(), defaultPermission, "self/mounts"),
+		"stat":    newDentry(root, inoGen.NextIno(), defaultPermission, &statData{k: k}),
 		//"uptime":      newUptime(ctx, msrc),
 		//"version": newVersionData(root, inoGen.NextIno(), k),
 		"version": newDentry(root, inoGen.NextIno(), defaultPermission, &versionData{k: k}),
 	}
 
 	inode := &tasksInode{
-		pidns:  pidns,
-		inoGen: inoGen,
+		pidns:             pidns,
+		inoGen:            inoGen,
+		selfSymlink:       newSelfSymlink(root, inoGen.NextIno(), 0444, pidns).VFSDentry(),
+		threadSelfSymlink: newThreadSelfSymlink(root, inoGen.NextIno(), 0444, pidns).VFSDentry(),
 	}
 	inode.InodeAttrs.Init(root, inoGen.NextIno(), linux.ModeDirectory|0555)
 
@@ -86,6 +91,13 @@ func (i *tasksInode) Lookup(ctx context.Context, name string) (*vfs.Dentry, erro
 	// Try to lookup a corresponding task.
 	tid, err := strconv.ParseUint(name, 10, 64)
 	if err != nil {
+		// If it failed to parse, check if it's one of the special handled files.
+		switch name {
+		case "self":
+			return i.selfSymlink, nil
+		case "thread-self":
+			return i.threadSelfSymlink, nil
+		}
 		return nil, syserror.ENOENT
 	}
 
@@ -104,29 +116,69 @@ func (i *tasksInode) Valid(ctx context.Context) bool {
 }
 
 // IterDirents implements kernfs.inodeDynamicLookup.
-//
-// TODO(gvisor.dev/issue/1195): Use tgid N offset = TGID_OFFSET + N.
-func (i *tasksInode) IterDirents(ctx context.Context, cb vfs.IterDirentsCallback, offset, relOffset int64) (int64, error) {
-	var tids []int
+func (i *tasksInode) IterDirents(ctx context.Context, cb vfs.IterDirentsCallback, offset, _ int64) (int64, error) {
+	// fs/proc/internal.h: #define FIRST_PROCESS_ENTRY 256
+	const FIRST_PROCESS_ENTRY = 256
 
-	// Collect all tasks. Per linux we only include it in directory listings if
-	// it's the leader. But for whatever crazy reason, you can still walk to the
-	// given node.
+	// Use maxTaskId to shortcut searches that will result in 0 entries.
+	const maxTaskId = kernel.TasksLimit + 1
+	if offset >= maxTaskId {
+		return offset, nil
+	}
+
+	// According to Linux (fs/proc/base.c:proc_pid_readdir()), process directories
+	// start at offset FIRST_PROCESS_ENTRY with '/proc/self', followed by
+	// '/proc/thread-self' and then '/proc/[pid]'.
+	if offset < FIRST_PROCESS_ENTRY {
+		offset = FIRST_PROCESS_ENTRY
+	}
+
+	if offset == FIRST_PROCESS_ENTRY {
+		dirent := vfs.Dirent{
+			Name:    "self",
+			Type:    linux.DT_LNK,
+			Ino:     i.inoGen.NextIno(),
+			NextOff: offset + 1,
+		}
+		if !cb.Handle(dirent) {
+			return offset, nil
+		}
+		offset++
+	}
+	if offset == FIRST_PROCESS_ENTRY+1 {
+		dirent := vfs.Dirent{
+			Name:    "thread-self",
+			Type:    linux.DT_LNK,
+			Ino:     i.inoGen.NextIno(),
+			NextOff: offset + 1,
+		}
+		if !cb.Handle(dirent) {
+			return offset, nil
+		}
+		offset++
+	}
+
+	// Collect all tasks that TGIDs are greater than the offset specified. Per
+	// Linux we only include in directory listings if it's the leader. But for
+	// whatever crazy reason, you can still walk to the given node.
+	var tids []int
+	startTid := offset - FIRST_PROCESS_ENTRY - 2
 	for _, tg := range i.pidns.ThreadGroups() {
+		tid := i.pidns.IDOfThreadGroup(tg)
+		if int64(tid) < startTid {
+			continue
+		}
 		if leader := tg.Leader(); leader != nil {
-			tids = append(tids, int(i.pidns.IDOfThreadGroup(tg)))
+			tids = append(tids, int(tid))
 		}
 	}
 
 	if len(tids) == 0 {
 		return offset, nil
 	}
-	if relOffset >= int64(len(tids)) {
-		return offset, nil
-	}
 
 	sort.Ints(tids)
-	for _, tid := range tids[relOffset:] {
+	for _, tid := range tids {
 		dirent := vfs.Dirent{
 			Name:    strconv.FormatUint(uint64(tid), 10),
 			Type:    linux.DT_DIR,
@@ -138,7 +190,7 @@ func (i *tasksInode) IterDirents(ctx context.Context, cb vfs.IterDirentsCallback
 		}
 		offset++
 	}
-	return offset, nil
+	return maxTaskId, nil
 }
 
 // Open implements kernfs.Inode.
