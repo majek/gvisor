@@ -1,9 +1,8 @@
 load("//tools/go_stateify:defs.bzl", "go_library")
 load("@io_bazel_rules_go//go:def.bzl", "go_test")
+load("//tools/go_generics:defs.bzl", "go_template_instance")
 
 package(licenses = ["notice"])
-
-load("//tools/go_generics:defs.bzl", "go_template_instance")
 
 go_template_instance(
     name = "dentry_list",
@@ -39,6 +38,7 @@ go_library(
         "//pkg/sentry/kernel/pipe",
         "//pkg/sentry/usermem",
         "//pkg/sentry/vfs",
+        "//pkg/sync",
         "//pkg/syserror",
     ],
 )

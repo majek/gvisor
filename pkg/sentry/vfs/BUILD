@@ -33,7 +33,7 @@ go_library(
         "//pkg/sentry/kernel/auth",
         "//pkg/sentry/memmap",
         "//pkg/sentry/usermem",
-        "//pkg/syncutil",
+        "//pkg/sync",
         "//pkg/syserror",
         "//pkg/waiter",
     ],
@@ -53,6 +53,7 @@ go_test(
         "//pkg/sentry/context/contexttest",
         "//pkg/sentry/kernel/auth",
         "//pkg/sentry/usermem",
+        "//pkg/sync",
         "//pkg/syserror",
     ],
 )

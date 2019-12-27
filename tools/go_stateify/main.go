@@ -27,7 +27,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
-	"sync"
+
+	"gvisor.dev/gvisor/pkg/sync"
 )
 
 var (

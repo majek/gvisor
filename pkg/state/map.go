@@ -19,9 +19,9 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
-	"sync"
 
 	pb "gvisor.dev/gvisor/pkg/state/object_go_proto"
+	"gvisor.dev/gvisor/pkg/sync"
 )
 
 // entry is a single map entry.

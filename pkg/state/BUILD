@@ -53,6 +53,7 @@ go_library(
     visibility = ["//:sandbox"],
     deps = [
         ":object_go_proto",
+        "//pkg/sync",
         "@com_github_golang_protobuf//proto:go_default_library",
     ],
 )
